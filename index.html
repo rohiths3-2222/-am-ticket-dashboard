@@ -410,8 +410,8 @@
 
 <footer>
   Data source: <code>data.json</code>. Response SLA: first response within 24h of raise, every follow-up within
-  72h until closed. Tickets open 7+ days are flagged critical. Ticket level = one row per Escalation ID;
-  TID level = one row per WBN. See README for wiring this to a live feed.
+  72h until closed. Tickets open 7+ days are flagged critical. Ticket level = one row per Escalation ID (Open if any row is open);
+  TID level = one row per WBN, open tickets only. See README for wiring this to a live feed.
 </footer>
 
 </div>
@@ -578,7 +578,7 @@ function ingestData(data, fromUpload, fromCache){
   updateAmButtonLabel();
 
   document.getElementById('uploadStatus').textContent = fromUpload
-    ? `Showing uploaded file: ${allTickets.length.toLocaleString('en-IN')} tickets, ${allTids.length.toLocaleString('en-IN')} TIDs, ${AMS.length} AMs. This is cached in this browser and will survive refreshes, but only here — download data.json below and commit it to the repo so the whole org sees it.`
+    ? `Showing uploaded file: ${allTickets.length.toLocaleString('en-IN')} tickets, ${allTids.length.toLocaleString('en-IN')} open TIDs, ${AMS.length} AMs. This is cached in this browser and will survive refreshes, but only here — download data.json below and commit it to the repo so the whole org sees it.`
     : 'Currently showing: last committed data.json.';
   document.getElementById('downloadJson').style.display = fromUpload ? 'inline-block' : 'none';
   document.getElementById('clearUpload').style.display = fromUpload ? 'inline-block' : 'none';
@@ -1092,10 +1092,12 @@ function excelRowsToDashboardData(sheetRows){
         raised: parseCustomDate(row['Escalation Date']),
         status: row['AM Escalation ID Status'] || 'Open',
         closed: parseCustomDate(row['Escalation Closure Date']),
-        frDates: [], lastDates: [], reescDates: [],
+        frDates: [], lastDates: [], reescDates: [], statuses: new Set(),
       });
     }
     const g = groups.get(id);
+    const rowStatus = row['AM Escalation ID Status'] || 'Open';
+    g.statuses.add(rowStatus);
     const fr = parseCustomDate(row['AM FR DateTime']);
     if (fr) g.frDates.push(fr);
     const last = parseCustomDate(row['Latest AM Comment Time']);
@@ -1103,14 +1105,14 @@ function excelRowsToDashboardData(sheetRows){
     const reesc = parseCustomDate(row['Last Re-Escalated At']);
     if (reesc) g.reescDates.push(reesc);
 
-    // TID (WBN) level row
+    // TID (WBN) level row: only TIDs whose ticket row is Open
     const wbn = row['WBN'], k = id + '|' + wbn;
-    if (wbn && !seen.has(k)) {
+    if (wbn && !seen.has(k) && rowStatus === 'Open') {
       seen.add(k);
       tids.push({
         ticket_id: id, wbn: String(wbn), am: g.am, seller_id: g.seller_id,
         issue_type: g.issue_type, subissue_type: g.subissue_type,
-        raised_date: toIsoOrNull(g.raised), status: g.status, closed_date: toIsoOrNull(g.closed),
+        raised_date: toIsoOrNull(g.raised), status: 'Open', closed_date: null,
         first_response_hours: (fr && g.raised) ? Math.round(((fr - g.raised)/3600000)*10)/10 : null,
         last_response_date: toIsoOrNull(last),
         escalated: false, escalation_id: null,
@@ -1118,6 +1120,8 @@ function excelRowsToDashboardData(sheetRows){
     }
   });
 
+  // Ticket level: Open if ANY row under the Escalation ID is Open (partial open counts as open, 1 count)
+  const ticketStatus = g => g.statuses.has('Open') ? 'Open' : (Array.from(g.statuses)[0] || 'Open');
   const tickets = [];
   const amsSet = new Set(), issueSet = new Set();
   groups.forEach(g => {
@@ -1132,8 +1136,8 @@ function excelRowsToDashboardData(sheetRows){
       issue_type: g.issue_type,
       subissue_type: g.subissue_type,
       raised_date: toIsoOrNull(g.raised),
-      status: g.status,
-      closed_date: toIsoOrNull(g.closed),
+      status: ticketStatus(g),
+      closed_date: ticketStatus(g) === 'Open' ? null : toIsoOrNull(g.closed),
       first_response_hours: (fr && g.raised) ? Math.round(((fr - g.raised)/3600000)*10)/10 : null,
       last_response_date: toIsoOrNull(last),
       escalated,
