@@ -411,7 +411,7 @@
 <footer>
   Data source: <code>data.json</code>. Response SLA: first response within 24h of raise, every follow-up within
   72h until closed. Tickets open 7+ days are flagged critical. Ticket level = one row per Escalation ID (Open if any row is open);
-  TID level = one row per WBN, open tickets only. See README for wiring this to a live feed.
+  TID level = one row per WBN, open TIDs only (by each TID's own status). See README for wiring this to a live feed.
 </footer>
 
 </div>
@@ -1079,6 +1079,9 @@ function toIsoOrNull(d){ return d ? d.toISOString().slice(0,19) : null; }
 function excelRowsToDashboardData(sheetRows){
   const groups = new Map();
   const tids = [], seen = new Set();
+  // per-TID status column (values like Open / Closed Successfully / Closed Unsuccessfully)
+  const tidStatusCol = sheetRows.length ? Object.keys(sheetRows[0]).find(k => k !== 'AM Escalation ID Status' &&
+    sheetRows.some(r => /^closed (un)?successfully$/i.test(String(r[k] == null ? '' : r[k]).trim()))) : null;
   sheetRows.forEach(row => {
     const id = row['Escalation ID'];
     if (!id) return;
@@ -1105,9 +1108,10 @@ function excelRowsToDashboardData(sheetRows){
     const reesc = parseCustomDate(row['Last Re-Escalated At']);
     if (reesc) g.reescDates.push(reesc);
 
-    // TID (WBN) level row: only TIDs whose ticket row is Open
+    // TID (WBN) level row: only TIDs whose own status is Open
     const wbn = row['WBN'], k = id + '|' + wbn;
-    if (wbn && !seen.has(k) && rowStatus === 'Open') {
+    const tidStatus = tidStatusCol ? String(row[tidStatusCol] == null ? 'Open' : row[tidStatusCol]).trim() : rowStatus;
+    if (wbn && !seen.has(k) && /^open$/i.test(tidStatus)) {
       seen.add(k);
       tids.push({
         ticket_id: id, wbn: String(wbn), am: g.am, seller_id: g.seller_id,
