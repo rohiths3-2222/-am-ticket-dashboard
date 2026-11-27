@@ -237,7 +237,7 @@
         <strong style="color:var(--text);font-size:13px;">Upload new ticket export</strong>
         <div class="sub">Drop in the same Excel export (.xlsx) to refresh this browser's view instantly.</div>
         <label class="dl" for="fileInput" style="cursor:pointer;display:inline-block;">Choose file…</label>
-        <input type="file" id="fileInput" accept=".xlsx,.xls" style="display:none;">
+        <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" style="display:none;">
         <button class="dl" id="downloadJson" style="display:none;margin-top:8px;">Download data.json</button>
         <button class="dl" id="clearUpload" style="display:none;margin-top:8px;margin-left:6px;">Clear uploaded data</button>
         <div class="sub" id="uploadStatus" style="margin-top:8px;">Currently showing: last committed data.json.</div>
@@ -410,8 +410,9 @@
 
 <footer>
   Data source: <code>data.json</code>. Response SLA: first response within 24h of raise, every follow-up within
-  72h until closed. Tickets open 7+ days are flagged critical. Ticket level = one row per Escalation ID (Open if any row is open);
-  TID level = one row per WBN, open TIDs only (by each TID's own status). See README for wiring this to a live feed.
+  72h until closed. Tickets open 7+ days are flagged critical. Status = the AM's own "AM Status" per TID.
+  Ticket level = one row per Escalation ID (Open if any TID is open); TID level = one row per WBN, open TIDs only.
+  See README for wiring this to a live feed.
 </footer>
 
 </div>
@@ -460,7 +461,7 @@ function syncTidHeader(){
   }
 
   if (localStorage.getItem('am_dashboard_access') === 'granted') {
-    enterDashboard();
+    window.addEventListener('DOMContentLoaded', enterDashboard);
   }
 
   form.addEventListener('submit', (e) => {
@@ -1079,9 +1080,11 @@ function toIsoOrNull(d){ return d ? d.toISOString().slice(0,19) : null; }
 function excelRowsToDashboardData(sheetRows){
   const groups = new Map();
   const tids = [], seen = new Set();
-  // per-TID status column (values like Open / Closed Successfully / Closed Unsuccessfully)
-  const tidStatusCol = sheetRows.length ? Object.keys(sheetRows[0]).find(k => k !== 'AM Escalation ID Status' &&
-    sheetRows.some(r => /^closed (un)?successfully$/i.test(String(r[k] == null ? '' : r[k]).trim()))) : null;
+  // Status used: the AM's own per-TID "AM Status" column when present; otherwise the per-item status column.
+  const amStatusCol = (sheetRows.length && Object.prototype.hasOwnProperty.call(sheetRows[0], 'AM Status')) ? 'AM Status' : null;
+  const tidStatusCol = amStatusCol || (sheetRows.length ? Object.keys(sheetRows[0]).find(k => k !== 'AM Escalation ID Status' &&
+    sheetRows.some(r => /^closed (un)?successfully$/i.test(String(r[k] == null ? '' : r[k]).trim()))) : null);
+  const normStatus = v => /^(partially )?open$/i.test(String(v == null ? 'Open' : v).trim()) ? 'Open' : 'Closed';
   sheetRows.forEach(row => {
     const id = row['Escalation ID'];
     if (!id) return;
@@ -1099,7 +1102,7 @@ function excelRowsToDashboardData(sheetRows){
       });
     }
     const g = groups.get(id);
-    const rowStatus = row['AM Escalation ID Status'] || 'Open';
+    const rowStatus = normStatus(tidStatusCol ? row[tidStatusCol] : (row['AM Escalation ID Status'] || 'Open'));
     g.statuses.add(rowStatus);
     const fr = parseCustomDate(row['AM FR DateTime']);
     if (fr) g.frDates.push(fr);
@@ -1108,10 +1111,9 @@ function excelRowsToDashboardData(sheetRows){
     const reesc = parseCustomDate(row['Last Re-Escalated At']);
     if (reesc) g.reescDates.push(reesc);
 
-    // TID (WBN) level row: only TIDs whose own status is Open
+    // TID (WBN) level row: only TIDs whose own AM status is Open
     const wbn = row['WBN'], k = id + '|' + wbn;
-    const tidStatus = tidStatusCol ? String(row[tidStatusCol] == null ? 'Open' : row[tidStatusCol]).trim() : rowStatus;
-    if (wbn && !seen.has(k) && /^open$/i.test(tidStatus)) {
+    if (wbn && !seen.has(k) && rowStatus === 'Open') {
       seen.add(k);
       tids.push({
         ticket_id: id, wbn: String(wbn), am: g.am, seller_id: g.seller_id,
@@ -1124,8 +1126,8 @@ function excelRowsToDashboardData(sheetRows){
     }
   });
 
-  // Ticket level: Open if ANY row under the Escalation ID is Open (partial open counts as open, 1 count)
-  const ticketStatus = g => g.statuses.has('Open') ? 'Open' : (Array.from(g.statuses)[0] || 'Open');
+  // Ticket level: Open if ANY TID under the Escalation ID is Open (partial open counts as open, 1 count)
+  const ticketStatus = g => g.statuses.has('Open') ? 'Open' : 'Closed';
   const tickets = [];
   const amsSet = new Set(), issueSet = new Set();
   groups.forEach(g => {
